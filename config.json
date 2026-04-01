@@ -1,0 +1,7 @@
+{
+  "ups": "myups",
+  "ip": "10.0.0.9",
+  "refreshSeconds": 5,
+  "commandTimeoutSeconds": 3,
+  "allowQueryOverride": false
+}
