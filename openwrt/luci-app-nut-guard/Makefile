@@ -13,4 +13,4 @@ define Package/luci-app-nut-guard/description
   No extra management port required.
 endef
 
-$(eval $(call BuildPackage,luci-app-nut-guard))
+$(eval $(call BuildPackage,$(LUCI_NAME)))
