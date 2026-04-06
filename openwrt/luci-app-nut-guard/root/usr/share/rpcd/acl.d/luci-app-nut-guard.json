@@ -1,0 +1,21 @@
+{
+  "luci-app-nut-guard": {
+    "description": "Grant access to Nut Guard LuCI resources",
+    "read": {
+      "ubus": {
+        "service": [ "list" ],
+        "file":    [ "read", "exec", "stat" ]
+      },
+      "uci":  [ "nut-guard" ],
+      "file": [ "/var/run/nut-guard/status.json", "/etc/init.d/nut-guard" ]
+    },
+    "write": {
+      "ubus": {
+        "uci":  [ "apply", "changes", "commit", "delete", "get", "revert", "set" ],
+        "file": [ "exec" ]
+      },
+      "uci":  [ "nut-guard" ],
+      "file": [ "/etc/init.d/nut-guard" ]
+    }
+  }
+}

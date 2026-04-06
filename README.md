@@ -167,6 +167,88 @@ docker run -d --name ups-web \
 
 服务启动后，可在终端查看运行日志，了解详细的连接和数据获取情况。
 
+---
+
+## ImmortalWrt / OpenWrt LuCI 集成
+
+> 支持版本：ImmortalWrt 24.10.x（OpenWrt 23.05+）
+
+通过安装 `nut-guard` 和 `luci-app-nut-guard` 两个 IPK 包，可在 LuCI 的 **服务 → Nut Guard** 菜单中直接管理守护进程与配置，**无需开放额外管理端口**。
+
+### 架构概览
+
+```
+NUT 服务器 (upsd:3493)
+       │  TCP
+       ▼
+  /usr/bin/nut-guard        ← Node.js 守护进程，由 procd 管理
+       │  写入
+       ▼
+/var/run/nut-guard/status.json
+       │  通过 rpcd/file RPC 读取
+       ▼
+  LuCI (uhttpd)  →  服务 → Nut Guard
+```
+
+### 包说明
+
+| 包 | 说明 |
+|----|------|
+| `nut-guard` | Node.js 守护进程 + procd init 脚本 + 默认 UCI 配置 |
+| `luci-app-nut-guard` | LuCI JS 视图 + 菜单入口 + rpcd ACL |
+
+### 构建方法（集成到 ImmortalWrt 编译环境）
+
+```bash
+# 在 ImmortalWrt 编译根目录执行
+echo 'src-link nutguard /path/to/nut-guard/openwrt' >> feeds.conf
+./scripts/feeds update nutguard
+./scripts/feeds install nut-guard luci-app-nut-guard
+
+make menuconfig   # 选中 Utilities/nut-guard 及 LuCI→Applications/luci-app-nut-guard
+make package/nut-guard/compile V=s
+make package/luci-app-nut-guard/compile V=s
+# IPK 输出位于 bin/packages/<arch>/nutguard/
+```
+
+### 在路由器上安装
+
+```bash
+opkg update
+opkg install nut-guard_*.ipk luci-app-nut-guard_*.ipk
+/etc/init.d/rpcd restart
+/etc/init.d/uhttpd restart
+```
+
+### UCI 配置
+
+配置文件路径：`/etc/config/nut-guard`
+
+```
+config main 'main'
+    option host '192.168.1.10'   # NUT 服务器 IP（upsd）
+    option port '3493'           # NUT 端口（默认 3493）
+    option ups  'ups'            # UPS 名称
+    option refresh_seconds '5'   # 轮询间隔（2–3600 秒）
+    option timeout_seconds '3'   # 查询超时（1–30 秒）
+```
+
+也可在 **LuCI → 服务 → Nut Guard** 界面中直接修改并保存。
+
+### 服务管理
+
+```bash
+/etc/init.d/nut-guard start    # 启动
+/etc/init.d/nut-guard stop     # 停止
+/etc/init.d/nut-guard restart  # 重启
+/etc/init.d/nut-guard enable   # 开机自启
+/etc/init.d/nut-guard disable  # 取消开机自启
+```
+
+守护进程将 UPS 状态写入 `/var/run/nut-guard/status.json`，LuCI 页面通过 rpcd 读取该文件进行展示。详细说明见 [`openwrt/README.md`](openwrt/README.md)。
+
+---
+
 ## 许可证
 
 MIT License
