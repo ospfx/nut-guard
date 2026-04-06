@@ -167,6 +167,114 @@ docker run -d --name ups-web \
 
 服务启动后，可在终端查看运行日志，了解详细的连接和数据获取情况。
 
+---
+
+## ImmortalWrt / OpenWrt — LuCI 集成
+
+> 适用于 ImmortalWrt 24.10.4（及同版本 OpenWrt 24.10），无需额外监听端口，管理界面通过 LuCI/uhttpd 提供。
+
+### 架构概览
+
+| 组件 | 说明 |
+|------|------|
+| `daemon.js` | 后台监控守护进程，通过 UCI 读取配置，定期查询 NUT 服务器，将结果写入 `/tmp/nut-guard/status.json` |
+| `openwrt/nut-guard/` | OpenWrt 包定义（package Makefile + 文件），依赖 `node` 包 |
+| `openwrt/luci-app-nut-guard/` | LuCI 应用包定义，提供"服务 → Nut Guard"菜单项 |
+| `/etc/init.d/nut-guard` | procd 管理脚本，支持启动/停止/开机自启/配置热重载 |
+| `/etc/config/nut-guard` | UCI 配置文件（NUT 服务器 IP、UPS 名称、刷新频率等） |
+
+### 安装步骤
+
+#### 1. 将包目录加入 OpenWrt 构建树
+
+```bash
+# 进入你的 OpenWrt/ImmortalWrt 源码目录
+cd ~/immortalwrt
+
+# 将包目录复制（或软链接）到 package/ 下
+cp -r /path/to/nut-guard/openwrt/nut-guard        package/nut-guard
+cp -r /path/to/nut-guard/openwrt/luci-app-nut-guard package/luci-app-nut-guard
+```
+
+也可在 `feeds.conf` 中添加为外部 feed：
+
+```
+src-git nut-guard https://github.com/ospfx/nut-guard.git
+```
+
+然后执行：
+
+```bash
+./scripts/feeds update nut-guard
+./scripts/feeds install nut-guard luci-app-nut-guard
+```
+
+#### 2. 编译
+
+```bash
+make menuconfig
+# 选择：Utilities → nut-guard
+#       LuCI → Applications → luci-app-nut-guard
+make package/nut-guard/compile
+make package/luci-app-nut-guard/compile
+```
+
+#### 3. 直接在路由器上安装（已有预编译 ipk）
+
+```bash
+opkg install nut-guard_0.1.0_all.ipk
+opkg install luci-app-nut-guard_0.1.0_all.ipk
+```
+
+> **依赖**：`node`（Node.js 运行时），可通过 `opkg install node` 安装。
+
+#### 4. 启动服务
+
+```bash
+# 启动并设置开机自启
+/etc/init.d/nut-guard enable
+/etc/init.d/nut-guard start
+```
+
+### UCI 配置说明
+
+配置文件路径：`/etc/config/nut-guard`
+
+```uci
+config nut-guard 'main'
+    option ups             'myups'    # UPS 名称（与 NUT 服务器配置一致）
+    option ip              '10.0.0.9' # NUT 服务器 IP 或主机名
+    option port            '3493'     # NUT 服务器端口（默认 3493）
+    option refresh_seconds '5'        # 查询间隔（秒），最小 2
+    option command_timeout_seconds '3' # 单次连接超时（秒）
+```
+
+命令行修改示例：
+
+```bash
+uci set nut-guard.main.ip=10.0.0.9
+uci set nut-guard.main.ups=myups
+uci commit nut-guard
+/etc/init.d/nut-guard restart
+```
+
+### LuCI 界面
+
+安装后，在 LuCI 导航栏选择 **服务 → Nut Guard**：
+
+- **Service Status**：显示守护进程运行状态，提供 Start / Stop / Restart / Enable autostart / Disable autostart 按钮
+- **UPS Status**：实时展示 UPS 电量、负载、电压、续航时间等关键指标，支持展开查看全部参数
+- **Connection Settings**：UCI 配置表单，修改后点击"Save & Apply"即可保存并自动重载守护进程
+
+### 注意事项
+
+- 守护进程**不会**开启任何额外 Web 端口，所有管理操作均通过 LuCI/uhttpd 完成
+- 状态数据存储在 `/tmp/nut-guard/status.json`（内存 tmpfs，重启后清空）
+- 修改 UCI 配置后无需手动重启：`procd_add_reload_trigger` 会在 UCI 变更应用时自动触发服务重载
+- `daemon.js`（仓库根目录）与 `openwrt/nut-guard/files/usr/share/nut-guard/daemon.js` 内容相同，后者供 OpenWrt 打包使用
+
+---
+
 ## 许可证
 
-MIT License
+本项目采用 GNU Affero General Public License v3（AGPL-3.0）。

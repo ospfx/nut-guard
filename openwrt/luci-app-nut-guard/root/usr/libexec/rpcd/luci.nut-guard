@@ -1,0 +1,53 @@
+#!/bin/sh
+# rpcd plugin for Nut Guard LuCI app
+# Provides: get_status, service_action
+
+. /usr/share/libubox/jshn.sh
+
+case "$1" in
+	list)
+		json_init
+		json_add_object "get_status"
+		json_close_object
+		json_add_object "service_action"
+		json_add_string "action" ""
+		json_close_object
+		json_dump
+		;;
+
+	call)
+		case "$2" in
+			get_status)
+				if [ -f /tmp/nut-guard/status.json ]; then
+					cat /tmp/nut-guard/status.json
+				else
+					json_init
+					json_add_boolean "ok" 0
+					json_add_string "error" "No status data — is the daemon running?"
+					json_dump
+				fi
+				;;
+
+			service_action)
+				read -r INPUT
+				json_load "$INPUT"
+				json_get_var action action
+				# Whitelist: only allow these exact literal values
+				case "$action" in
+					start|stop|restart|reload|enable|disable)
+						/etc/init.d/nut-guard "$action" >/dev/null 2>&1
+						json_init
+						json_add_boolean "result" 1
+						json_dump
+						;;
+					*)
+						json_init
+						json_add_boolean "result" 0
+						json_add_string "error" "Invalid action"
+						json_dump
+						;;
+				esac
+				;;
+		esac
+		;;
+esac

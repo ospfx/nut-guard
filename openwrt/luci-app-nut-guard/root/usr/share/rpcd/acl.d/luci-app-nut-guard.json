@@ -1,0 +1,22 @@
+{
+  "luci-app-nut-guard": {
+    "description": "Grant UCI and ubus access for the Nut Guard LuCI app",
+    "read": {
+      "uci": [ "nut-guard" ],
+      "ubus": {
+        "service": [ "list" ],
+        "luci.nut-guard": [ "get_status", "service_action" ]
+      },
+      "file": {
+        "/tmp/nut-guard/status.json": [ "read" ],
+        "/var/run/nut-guard.pid": [ "read" ]
+      }
+    },
+    "write": {
+      "uci": [ "nut-guard" ],
+      "ubus": {
+        "luci.nut-guard": [ "service_action" ]
+      }
+    }
+  }
+}
