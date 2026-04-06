@@ -63,19 +63,42 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Verify package directories
+      - name: Detect package dirs
+        id: detect
         run: |
           set -eux
-          test -f package/nut-guard/Makefile
-          test -f package/luci-app-nut-guard/Makefile
+
+          # 找 nut-guard 包（排除 luci-app）
+          NUT_DIR="$(find . -type f -name Makefile \
+            -not -path '*/.git/*' \
+            -exec grep -l 'PKG_NAME:=nut-guard' {} \; \
+            | grep -v 'luci-app-nut-guard' \
+            | head -n1 | xargs dirname || true)"
+
+          # 找 luci-app-nut-guard 包
+          LUCI_DIR="$(find . -type f -name Makefile \
+            -not -path '*/.git/*' \
+            -exec grep -l 'PKG_NAME:=luci-app-nut-guard' {} \; \
+            | head -n1 | xargs dirname || true)"
+
+          test -n "${NUT_DIR}"
+          test -n "${LUCI_DIR}"
+          test -f "${NUT_DIR}/Makefile"
+          test -f "${LUCI_DIR}/Makefile"
+
+          echo "NUT_DIR=${NUT_DIR}" >> $GITHUB_ENV
+          echo "LUCI_DIR=${LUCI_DIR}" >> $GITHUB_ENV
+
+          echo "Detected NUT_DIR=${NUT_DIR}"
+          echo "Detected LUCI_DIR=${LUCI_DIR}"
 
       - name: Copy custom packages into SDK
         run: |
           set -eux
           mkdir -p "${SDK_DIR}/package/nut-guard"
           mkdir -p "${SDK_DIR}/package/luci-app-nut-guard"
-          rsync -a --delete package/nut-guard/ "${SDK_DIR}/package/nut-guard/"
-          rsync -a --delete package/luci-app-nut-guard/ "${SDK_DIR}/package/luci-app-nut-guard/"
+          rsync -a --delete "${NUT_DIR}/" "${SDK_DIR}/package/nut-guard/"
+          rsync -a --delete "${LUCI_DIR}/" "${SDK_DIR}/package/luci-app-nut-guard/"
 
       - name: Configure build
         working-directory: ${{ env.SDK_DIR }}
