@@ -167,6 +167,145 @@ docker run -d --name ups-web \
 
 服务启动后，可在终端查看运行日志，了解详细的连接和数据获取情况。
 
+## ImmortalWrt / LuCI 集成（推荐）
+
+### 概述
+
+通过 OpenWrt/ImmortalWrt 打包支持，可将 Nut Guard 集成到 LuCI 管理界面（**服务 → Nut Guard**），**无需额外开放管理端口**。后台守护进程由 procd 管理，配置通过 UCI 持久化。
+
+### 架构说明
+
+| 组件 | 说明 |
+|------|------|
+| `monitor.js` | 后台守护进程：读取 UCI 配置，通过 TCP 连接 NUT 服务器，将状态写入 `/var/run/nut-guard/status.json` |
+| `openwrt/nut-guard/` | OpenWrt 包定义（procd init 脚本 + UCI 默认配置） |
+| `openwrt/luci-app-nut-guard/` | LuCI JS 视图 + 菜单定义 + rpcd ACL |
+
+### 文件结构
+
+```
+openwrt/
+├── nut-guard/                        # 守护进程包
+│   ├── Makefile
+│   └── files/
+│       ├── nut-guard.init            # procd 服务脚本 → /etc/init.d/nut-guard
+│       └── nut-guard.conf            # UCI 默认配置  → /etc/config/nut-guard
+└── luci-app-nut-guard/               # LuCI 应用包
+    ├── Makefile
+    ├── htdocs/luci-static/resources/view/nut-guard/
+    │   └── overview.js               # LuCI JS 视图（状态 + 配置）
+    └── root/usr/share/
+        ├── luci/menu.d/luci-app-nut-guard.json   # 服务菜单入口
+        └── rpcd/acl.d/luci-app-nut-guard.json    # RPC 权限
+```
+
+### UCI 配置项（/etc/config/nut-guard）
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `enabled` | boolean | 1 | 是否启用守护进程 |
+| `ups_name` | string | myups | NUT 中的 UPS 名称 |
+| `nut_host` | string | 127.0.0.1 | NUT 服务器地址 |
+| `nut_port` | integer | 3493 | NUT 服务器端口 |
+| `refresh_seconds` | integer | 10 | 查询间隔（秒） |
+| `timeout_seconds` | integer | 3 | 连接超时（秒） |
+
+### 手动安装方式（无构建系统）
+
+1. **安装 Node.js**（在 ImmortalWrt 上）：
+   ```bash
+   opkg update && opkg install node
+   ```
+
+2. **安装守护进程文件**：
+   ```bash
+   # 创建目录
+   mkdir -p /usr/share/nut-guard
+
+   # 上传 monitor.js（通过 SCP 或 SFTP）
+   scp monitor.js root@<路由器IP>:/usr/share/nut-guard/
+
+   # 上传 init 脚本
+   scp openwrt/nut-guard/files/nut-guard.init root@<路由器IP>:/etc/init.d/nut-guard
+   chmod +x /etc/init.d/nut-guard
+
+   # 上传默认配置（仅首次安装）
+   scp openwrt/nut-guard/files/nut-guard.conf root@<路由器IP>:/etc/config/nut-guard
+   ```
+
+3. **安装 LuCI 应用**：
+   ```bash
+   # 菜单定义
+   mkdir -p /usr/share/luci/menu.d
+   scp openwrt/luci-app-nut-guard/root/usr/share/luci/menu.d/luci-app-nut-guard.json \
+       root@<路由器IP>:/usr/share/luci/menu.d/
+
+   # RPC ACL
+   mkdir -p /usr/share/rpcd/acl.d
+   scp openwrt/luci-app-nut-guard/root/usr/share/rpcd/acl.d/luci-app-nut-guard.json \
+       root@<路由器IP>:/usr/share/rpcd/acl.d/
+
+   # LuCI JS 视图
+   mkdir -p /www/luci-static/resources/view/nut-guard
+   scp openwrt/luci-app-nut-guard/htdocs/luci-static/resources/view/nut-guard/overview.js \
+       root@<路由器IP>:/www/luci-static/resources/view/nut-guard/
+   ```
+
+4. **修改配置并启动**：
+   ```bash
+   # 编辑 UCI 配置
+   uci set nut-guard.settings.nut_host='10.0.0.9'
+   uci set nut-guard.settings.ups_name='myups'
+   uci commit nut-guard
+
+   # 启用并启动服务
+   /etc/init.d/nut-guard enable
+   /etc/init.d/nut-guard start
+   ```
+
+5. **重启 rpcd 使 ACL 生效**：
+   ```bash
+   /etc/init.d/rpcd restart
+   ```
+
+6. **刷新 LuCI 缓存**（可选）：
+   ```bash
+   rm -f /tmp/luci-indexcache*
+   ```
+
+7. 打开浏览器，访问路由器管理界面，进入 **服务 → Nut Guard** 即可看到 UPS 状态和配置页面。
+
+### OpenWrt SDK 构建方式
+
+将本仓库的 `openwrt/nut-guard` 和 `openwrt/luci-app-nut-guard` 目录复制到 OpenWrt SDK 的 `package/` 目录下，然后：
+
+```bash
+make menuconfig
+# 选中 Utilities → nut-guard
+# 选中 LuCI → Applications → luci-app-nut-guard
+
+make package/nut-guard/compile V=s
+make package/luci-app-nut-guard/compile V=s
+```
+
+生成的 `.ipk` 文件位于 `bin/packages/<arch>/base/` 目录下。
+
+### 服务管理命令
+
+```bash
+# 启动 / 停止 / 重启
+/etc/init.d/nut-guard start
+/etc/init.d/nut-guard stop
+/etc/init.d/nut-guard restart
+
+# 开机自启
+/etc/init.d/nut-guard enable
+/etc/init.d/nut-guard disable
+
+# 查看状态
+cat /var/run/nut-guard/status.json
+```
+
 ## 许可证
 
 MIT License

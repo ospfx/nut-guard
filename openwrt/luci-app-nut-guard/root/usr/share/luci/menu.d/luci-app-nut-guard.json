@@ -1,0 +1,10 @@
+{
+	"admin/services/nut-guard": {
+		"title": "Nut Guard",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "nut-guard/overview"
+		}
+	}
+}
