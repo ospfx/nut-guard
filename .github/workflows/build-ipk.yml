@@ -60,8 +60,11 @@ jobs:
       - name: Prepare feeds
         working-directory: ${{ env.SDK_DIR }}
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          #./scripts/feeds update -a
+          #./scripts/feeds install -a
+          ./scripts/feeds update base luci packages
+          ./scripts/feeds install luci-base
+          ./scripts/feeds install node
 
       - name: Verify package directories (strict dual-package)
         run: |
@@ -97,7 +100,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y pv
       
           # 先粗估总日志行数（串行 dry-run，快于真编译很多）
-          EST_LINES="$(make -n package/nut-guard/compile V=s 2>/dev/null | wc -l || true)"
+          EST_LINES="$(make -n package/nut-guard/{clean,compile} V=s 2>/dev/null | wc -l || true)"
           if [ -z "${EST_LINES}" ] || [ "${EST_LINES}" -lt 200 ]; then
             EST_LINES=4000
           fi
@@ -106,7 +109,7 @@ jobs:
           # 真编译：并行执行，输出写日志，并用 pv 显示估算百分比
           # 保留 make 的退出码
           set +e
-          make package/nut-guard/compile V=s -j"$(nproc)" 2>&1 \
+          make package/nut-guard/{clean,compile} -j"$(nproc)" 2>&1 \
             | tee "${GITHUB_WORKSPACE}/nut-guard-build.log" \
             | pv -l -s "${EST_LINES}" -N "nut-guard compile" > /dev/null
           MAKE_RC=${PIPESTATUS[0]}
@@ -120,13 +123,13 @@ jobs:
         working-directory: ${{ env.SDK_DIR }}
         run: |
           set -euo pipefail
-          EST_LINES="$(make -n package/luci-app-nut-guard/compile V=s 2>/dev/null | wc -l || true)"
+          EST_LINES="$(make -n package/luci-app-nut-guard/{clean,compile} V=s 2>/dev/null | wc -l || true)"
           if [ -z "${EST_LINES}" ] || [ "${EST_LINES}" -lt 200 ]; then
             EST_LINES=4000
           fi
           echo "Estimated total steps(lines): ${EST_LINES}"
           set +e
-          make package/luci-app-nut-guard/compile V=s -j"$(nproc)" 2>&1 \
+          make package/luci-app-nut-guard/{clean,compile} -j"$(nproc)" V=s -j"$(nproc)" 2>&1 \
             | tee "${GITHUB_WORKSPACE}/luci-app-nut-guard-build.log" \
             | pv -l -s "${EST_LINES}" -N "luci-app-nut-guard compile" > /dev/null
           MAKE_RC=${PIPESTATUS[0]}
