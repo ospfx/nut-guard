@@ -27,6 +27,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repo
@@ -95,7 +97,7 @@ jobs:
 
           EST_LINES="$(make -n package/luci-app-nut-guard/{clean,compile} V=s 2>/dev/null | wc -l || true)"
           if [ -z "${EST_LINES}" ] || [ "${EST_LINES}" -lt 200 ]; then
-            EST_LINES=4000
+            EST_LINES=4000  # conservative fallback for a typical OpenWrt package build
           fi
           echo "Estimated total steps(lines): ${EST_LINES}"
 

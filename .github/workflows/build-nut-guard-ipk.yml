@@ -27,6 +27,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repo
@@ -95,12 +97,12 @@ jobs:
 
           EST_LINES="$(make -n package/nut-guard/{clean,compile} V=s 2>/dev/null | wc -l || true)"
           if [ -z "${EST_LINES}" ] || [ "${EST_LINES}" -lt 200 ]; then
-            EST_LINES=4000
+            EST_LINES=4000  # conservative fallback for a typical OpenWrt package build
           fi
           echo "Estimated total steps(lines): ${EST_LINES}"
 
           set +e
-          make package/nut-guard/{clean,compile} -j"$(nproc)" 2>&1 \
+          make package/nut-guard/{clean,compile} -j"$(nproc)" V=w 2>&1 \
             | tee "${GITHUB_WORKSPACE}/nut-guard-build.log" \
             | pv -l -s "${EST_LINES}" -N "nut-guard compile" > /dev/null
           MAKE_RC=${PIPESTATUS[0]}
