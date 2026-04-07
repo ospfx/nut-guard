@@ -410,7 +410,6 @@ return view.extend({
 		}
 
 		// Start polling
-		var self2 = this;
 		poll.add(function() {
 			return callGetUps().then(function(payload) {
 				if (!payload) return;
@@ -499,6 +498,8 @@ return view.extend({
 		});
 	},
 
+	// LuCI view interface: disable the built-in Save / Save & Apply / Reset
+	// buttons — this view manages its own save flow via _handleSave.
 	handleSaveApply: null,
 	handleSave:      null,
 	handleReset:     null,

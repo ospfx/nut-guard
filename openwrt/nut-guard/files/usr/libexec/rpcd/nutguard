@@ -45,7 +45,8 @@ local function is_valid_ip_or_host(s)
 		end
 		return true
 	end
-	-- hostname: starts and ends with alphanumeric, middle may contain - or .
+	-- hostname: starts and ends with alphanumeric; no consecutive dots or hyphens
+	if s:match("%.%.") or s:match("%-%-") then return false end
 	return s:match("^[A-Za-z0-9]$") ~= nil
 		or s:match("^[A-Za-z0-9][A-Za-z0-9%-%.]*[A-Za-z0-9]$") ~= nil
 end
@@ -103,16 +104,25 @@ local function get_ups_data(ups, ip, timeout_sec)
 	end
 
 	-- Create TCP socket
-	local sock = nixio.socket("inet", "stream")
+	local sock, sock_err = nixio.socket("inet", "stream")
 	if not sock then
-		return { ok = false, error = "无法创建 socket", tookMs = 0 }
+		return { ok = false, error = "无法创建 socket: " .. tostring(sock_err or "unknown"), tookMs = 0 }
 	end
 
 	local tv = math.max(1, math.floor(timeout_sec))
 
-	-- Non-blocking connect so we can honour the timeout
-	sock:setblocking(false)
-	sock:connect(ip, NUT_PORT)   -- returns immediately; EINPROGRESS is expected
+	-- Non-blocking connect; for refused/unreachable connections this returns an
+	-- error immediately (ECONNREFUSED, EHOSTUNREACH, etc.).  For connections that
+	-- are in progress (EINPROGRESS / EAGAIN) we fall through to poll().
+	local conn_ok, conn_errno, conn_errmsg = sock:connect(ip, NUT_PORT)
+	if not conn_ok and conn_errno ~= nixio.const.EINPROGRESS and conn_errno ~= nixio.const.EAGAIN then
+		sock:close()
+		return {
+			ok     = false,
+			error  = string.format("连接 NUT 服务器失败: %s", tostring(conn_errmsg or conn_errno)),
+			tookMs = took_ms(),
+		}
+	end
 
 	-- Wait for connection with poll (timeout_sec * 1000 ms)
 	local poll_ms = math.max(1000, tv * 1000)
