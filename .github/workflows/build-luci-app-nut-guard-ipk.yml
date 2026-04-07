@@ -1,0 +1,132 @@
+name: Build luci-app-nut-guard IPK
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "OpenWrt target (e.g. x86, ramips, rockchip)"
+        required: true
+        default: "x86"
+      subtarget:
+        description: "OpenWrt subtarget (e.g. 64, 24kc, armv8)"
+        required: true
+        default: "64"
+      arch:
+        description: "Package arch (e.g. x86_64, mipsel_24kc, aarch64_cortex-a53)"
+        required: true
+        default: "x86_64"
+      release:
+        description: "OpenWrt release (e.g. 24.10.0, 23.05.5)"
+        required: true
+        default: "24.10.0"
+      sdk_gcc:
+        description: "SDK gcc string (e.g. gcc-13.3.0_musl)"
+        required: true
+        default: "gcc-13.3.0_musl"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zstd \
+            zlib1g-dev file wget curl ca-certificates
+
+      - name: Download OpenWrt SDK
+        env:
+          TARGET: ${{ inputs.target }}
+          SUBTARGET: ${{ inputs.subtarget }}
+          RELEASE: ${{ inputs.release }}
+          SDK_GCC: ${{ inputs.sdk_gcc }}
+        run: |
+          set -eux
+          SDK_FILE="openwrt-sdk-${RELEASE}-${TARGET}-${SUBTARGET}_${SDK_GCC}.Linux-x86_64.tar.zst"
+          SDK_URL="https://downloads.openwrt.org/releases/${RELEASE}/targets/${TARGET}/${SUBTARGET}/${SDK_FILE}"
+          echo "Downloading: ${SDK_URL}"
+          wget -q --show-progress "${SDK_URL}" -O sdk.tar.zst
+          tar --zstd -xf sdk.tar.zst
+          SDK_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-sdk-*' | head -n1)"
+          test -n "${SDK_DIR}"
+          echo "SDK_DIR=${SDK_DIR}" >> $GITHUB_ENV
+
+      - name: Prepare feeds
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          ./scripts/feeds update base luci packages
+          ./scripts/feeds install luci-base
+          ./scripts/feeds install node
+
+      - name: Verify package directory
+        run: |
+          set -euxo pipefail
+          test -f openwrt/luci-app-nut-guard/Makefile
+
+      - name: Copy custom package into SDK
+        run: |
+          set -euxo pipefail
+          mkdir -p "${SDK_DIR}/package/luci-app-nut-guard"
+          rsync -a --delete openwrt/luci-app-nut-guard/ "${SDK_DIR}/package/luci-app-nut-guard/"
+
+      - name: Configure build
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          set -euxo pipefail
+          cat >> .config <<'EOF'
+          CONFIG_ALL_NONSHARED=n
+          CONFIG_ALL_KMODS=n
+          CONFIG_AUTOREMOVE=y
+          CONFIG_PACKAGE_luci-app-nut-guard=y
+          EOF
+          make defconfig
+
+      - name: Build luci-app-nut-guard
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y pv
+
+          EST_LINES="$(make -n package/luci-app-nut-guard/{clean,compile} V=s 2>/dev/null | wc -l || true)"
+          if [ -z "${EST_LINES}" ] || [ "${EST_LINES}" -lt 200 ]; then
+            EST_LINES=4000
+          fi
+          echo "Estimated total steps(lines): ${EST_LINES}"
+
+          set +e
+          make package/luci-app-nut-guard/{clean,compile} -j"$(nproc)" V=w 2>&1 \
+            | tee "${GITHUB_WORKSPACE}/luci-app-nut-guard-build.log" \
+            | pv -l -s "${EST_LINES}" -N "luci-app-nut-guard compile" > /dev/null
+          MAKE_RC=${PIPESTATUS[0]}
+          set -e
+
+          echo "make exit code: ${MAKE_RC}"
+          exit ${MAKE_RC}
+
+      - name: Assert luci ipk exists
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          set -euxo pipefail
+          find bin/packages -type f -name "luci-app-nut-guard*.ipk" -print
+
+      - name: Collect artifacts
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          set -eux
+          mkdir -p "${GITHUB_WORKSPACE}/dist"
+          find bin/packages -type f -name "luci-app-nut-guard*.ipk" \
+            -exec cp -v {} "${GITHUB_WORKSPACE}/dist/" \;
+          ls -lah "${GITHUB_WORKSPACE}/dist"
+
+      - name: Upload ipk
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipk-luci-app-nut-guard-${{ inputs.target }}-${{ inputs.subtarget }}-${{ inputs.arch }}
+          path: dist/*.ipk
+          if-no-files-found: error
