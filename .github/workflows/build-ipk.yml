@@ -123,13 +123,14 @@ jobs:
         working-directory: ${{ env.SDK_DIR }}
         run: |
           set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y pv
           EST_LINES="$(make -n package/luci-app-nut-guard/{clean,compile} V=s 2>/dev/null | wc -l || true)"
           if [ -z "${EST_LINES}" ] || [ "${EST_LINES}" -lt 200 ]; then
             EST_LINES=4000
           fi
           echo "Estimated total steps(lines): ${EST_LINES}"
           set +e
-          make package/luci-app-nut-guard/{clean,compile} -j"$(nproc)" V=s -j"$(nproc)" 2>&1 \
+          make package/luci-app-nut-guard/{clean,compile} -j"$(nproc)" V=w 2>&1 \
             | tee "${GITHUB_WORKSPACE}/luci-app-nut-guard-build.log" \
             | pv -l -s "${EST_LINES}" -N "luci-app-nut-guard compile" > /dev/null
           MAKE_RC=${PIPESTATUS[0]}
@@ -137,6 +138,12 @@ jobs:
       
           echo "make exit code: ${MAKE_RC}"
           exit ${MAKE_RC}
+
+      - name: Assert luci ipk exists
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          set -euxo pipefail
+          find bin/packages -type f -name "luci-app-nut-guard*.ipk" -print
 
       - name: Collect artifacts
         working-directory: ${{ env.SDK_DIR }}
