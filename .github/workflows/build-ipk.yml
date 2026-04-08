@@ -101,6 +101,15 @@ jobs:
           fi
           echo "OK: nixio not present in Makefile"
 
+      - name: Assert lua-socket absent from nut-guard Makefile
+        run: |
+          set -euo pipefail
+          if grep -q 'lua-socket' openwrt/nut-guard/Makefile; then
+            echo "ERROR: lua-socket found in openwrt/nut-guard/Makefile – remove it from DEPENDS"
+            exit 1
+          fi
+          echo "OK: lua-socket not present in Makefile"
+
       - name: Assert nixio absent from nutguard Lua script
         run: |
           set -euo pipefail
@@ -110,3 +119,13 @@ jobs:
             exit 1
           fi
           echo "OK: no nixio references in nutguard script"
+
+      - name: Assert lua-socket absent from nutguard Lua script
+        run: |
+          set -euo pipefail
+          if grep -qE "require.*['\"]socket['\"]|require.*lua.socket|socket\.tcp|socket\.gettime" \
+               openwrt/nut-guard/files/usr/libexec/rpcd/nutguard; then
+            echo "ERROR: lua-socket reference found in nutguard script"
+            exit 1
+          fi
+          echo "OK: no lua-socket references in nutguard script"
