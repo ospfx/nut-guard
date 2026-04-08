@@ -91,3 +91,22 @@ jobs:
           test -f openwrt/luci-app-nut-guard/htdocs/luci-static/resources/view/nut-guard/overview.js
           test -f openwrt/luci-app-nut-guard/root/usr/share/luci/menu.d/luci-app-nut-guard.json
           test -f openwrt/luci-app-nut-guard/root/usr/share/rpcd/acl.d/luci-app-nut-guard.json
+
+      - name: Assert nixio absent from nut-guard Makefile
+        run: |
+          set -euo pipefail
+          if grep -q 'nixio' openwrt/nut-guard/Makefile; then
+            echo "ERROR: nixio found in openwrt/nut-guard/Makefile – remove it from DEPENDS"
+            exit 1
+          fi
+          echo "OK: nixio not present in Makefile"
+
+      - name: Assert nixio absent from nutguard Lua script
+        run: |
+          set -euo pipefail
+          if grep -qE 'require.*nixio|nixio\.' \
+               openwrt/nut-guard/files/usr/libexec/rpcd/nutguard; then
+            echo "ERROR: nixio reference found in nutguard script"
+            exit 1
+          fi
+          echo "OK: no nixio references in nutguard script"

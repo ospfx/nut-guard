@@ -198,9 +198,12 @@ ubus call nutguard get_ups '{"ups":"myups","ip":"10.0.0.9"}'
 ### 方法 B：手动安装（调试用）
 
 ```bash
-# 1. 安装依赖
+# 0. 安装前检查依赖可用性
 opkg update
-opkg install rpcd lua libuci-lua luci-base nixio
+opkg info rpcd lua libuci-lua luci-base lua-socket
+
+# 1. 安装依赖
+opkg install rpcd lua libuci-lua luci-base lua-socket
 
 # 2. 复制插件
 scp openwrt/nut-guard/files/usr/libexec/rpcd/nutguard root@<router>:/usr/libexec/rpcd/
@@ -216,6 +219,14 @@ scp openwrt/luci-app-nut-guard/root/usr/share/rpcd/acl.d/luci-app-nut-guard.json
 # 5. 重载 rpcd
 /etc/init.d/rpcd reload
 ```
+
+### 常见报错排查
+
+| 错误信息 | 原因 | 解决方法 |
+|----------|------|----------|
+| `cannot find dependency nixio` | 旧版 ipk 包含 nixio 依赖 | 使用最新构建的 ipk（已移除 nixio）|
+| `cannot find dependency lua-socket` | feeds 中无 lua-socket | `opkg update && opkg install lua-socket` |
+| `incompatible architectures` | ipk 架构与设备不符 | 重新用设备对应 SDK 构建（包已标记 `PKGARCH:=all`）|
 
 ### 验证
 
