@@ -1,14 +1,6 @@
 name: Build luci-app-nut-guard IPK
 
 on:
-  push:
-    paths:
-      - 'openwrt/luci-app-nut-guard/**'
-      - '.github/workflows/build-luci-app-nut-guard-ipk.yml'
-  pull_request:
-    paths:
-      - 'openwrt/luci-app-nut-guard/**'
-      - '.github/workflows/build-luci-app-nut-guard-ipk.yml'
   workflow_dispatch:
     inputs:
       target:
@@ -32,13 +24,8 @@ on:
         required: true
         default: "gcc-13.3.0_musl"
 
-# Cancel redundant runs for the same ref so only the latest push is built.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  build-openwrt-package:
+  build:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -57,10 +44,10 @@ jobs:
 
       - name: Download OpenWrt SDK
         env:
-          TARGET: ${{ inputs.target || 'x86' }}
-          SUBTARGET: ${{ inputs.subtarget || '64' }}
-          RELEASE: ${{ inputs.release || '24.10.0' }}
-          SDK_GCC: ${{ inputs.sdk_gcc || 'gcc-13.3.0_musl' }}
+          TARGET: ${{ inputs.target }}
+          SUBTARGET: ${{ inputs.subtarget }}
+          RELEASE: ${{ inputs.release }}
+          SDK_GCC: ${{ inputs.sdk_gcc }}
         run: |
           set -eux
           SDK_FILE="openwrt-sdk-${RELEASE}-${TARGET}-${SUBTARGET}_${SDK_GCC}.Linux-x86_64.tar.zst"
@@ -73,12 +60,11 @@ jobs:
           echo "SDK_DIR=${SDK_DIR}" >> $GITHUB_ENV
 
       - name: Prepare feeds
-        # Install only feeds required by luci-app-nut-guard (luci-base + nut-guard).
-        # The node feed is not needed – this is a pure Lua/LuCI package.
         working-directory: ${{ env.SDK_DIR }}
         run: |
           ./scripts/feeds update base luci packages
           ./scripts/feeds install luci-base
+          ./scripts/feeds install node
 
       - name: Verify package directory
         run: |
@@ -143,6 +129,6 @@ jobs:
       - name: Upload ipk
         uses: actions/upload-artifact@v4
         with:
-          name: ipk-luci-app-nut-guard-${{ inputs.target || 'x86' }}-${{ inputs.subtarget || '64' }}-${{ inputs.arch || 'x86_64' }}
+          name: ipk-luci-app-nut-guard-${{ inputs.target }}-${{ inputs.subtarget }}-${{ inputs.arch }}
           path: dist/*.ipk
           if-no-files-found: error

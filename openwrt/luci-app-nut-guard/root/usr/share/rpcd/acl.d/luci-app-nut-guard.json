@@ -1,17 +1,18 @@
 {
 	"luci-app-nut-guard": {
-		"description": "Grant UCI and ubus access for luci-app-nut-guard",
+		"description": "Grant UCI and file access for luci-app-nut-guard",
 		"read": {
 			"uci": [ "nut-guard" ],
+			"file": {
+				"/var/run/nut-guard/status.json": [ "read" ]
+			},
 			"ubus": {
-				"nutguard": [ "get_config", "get_ups" ],
 				"luci": [ "getInitList", "getInitStatus" ]
 			}
 		},
 		"write": {
 			"uci": [ "nut-guard" ],
 			"ubus": {
-				"nutguard": [ "set_config" ],
 				"luci": [ "setInitAction" ]
 			}
 		}
