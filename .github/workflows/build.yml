@@ -29,6 +29,8 @@ jobs:
   frontend:
     name: Build frontend (luci-app-nut-guard)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     if: >
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.target == 'frontend'
@@ -45,27 +47,28 @@ jobs:
           VERSION: ${{ env.PKG_VERSION }}
         run: |
           set -euo pipefail
+          REPO="$(pwd)"
           PKG="luci-app-nut-guard"
-          BUILD="build/${PKG}"
+          BUILD="${REPO}/build/${PKG}"
 
           mkdir -p "${BUILD}/data"
-          cp -a luci-app-nut-guard/root/. "${BUILD}/data/"
+          cp -a "${REPO}/luci-app-nut-guard/root/." "${BUILD}/data/"
 
           mkdir -p "${BUILD}/control"
           printf 'Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: ospfx\nDepends: luci-base, nut-guard\nSection: luci\nPriority: optional\nDescription: LuCI support for Nut Guard UPS monitor\n' \
             "${PKG}" "${VERSION}" > "${BUILD}/control/control"
           touch "${BUILD}/control/conffiles"
 
-          mkdir -p dist
+          mkdir -p "${REPO}/dist"
           echo "2.0" > "${BUILD}/debian-binary"
-          (cd "${BUILD}/data"    && tar --numeric-owner --owner=0 --group=0 -czf ../../data.tar.gz .)
-          (cd "${BUILD}/control" && tar --numeric-owner --owner=0 --group=0 -czf ../../control.tar.gz .)
-          ar r "dist/${PKG}-${VERSION}.ipk" \
-              "${BUILD}/debian-binary" \
-              "build/control.tar.gz"   \
-              "build/data.tar.gz"
+          (cd "${BUILD}/data"    && tar --numeric-owner --owner=0 --group=0 -czf "${BUILD}/data.tar.gz" .)
+          (cd "${BUILD}/control" && tar --numeric-owner --owner=0 --group=0 -czf "${BUILD}/control.tar.gz" .)
+          ar r "${REPO}/dist/${PKG}-${VERSION}.ipk" \
+              "${BUILD}/debian-binary"   \
+              "${BUILD}/control.tar.gz"  \
+              "${BUILD}/data.tar.gz"
           echo "Built: dist/${PKG}-${VERSION}.ipk"
-          ls -lh dist/
+          ls -lh "${REPO}/dist/"
 
       - name: Upload frontend artifact
         uses: actions/upload-artifact@v4
@@ -80,6 +83,8 @@ jobs:
   backend:
     name: Build backend (nut-guard)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     if: >
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.target == 'backend'
@@ -96,27 +101,28 @@ jobs:
           VERSION: ${{ env.PKG_VERSION }}
         run: |
           set -euo pipefail
+          REPO="$(pwd)"
           PKG="nut-guard"
-          BUILD="build/${PKG}"
+          BUILD="${REPO}/build/${PKG}"
 
           mkdir -p "${BUILD}/data"
-          cp -a nut-guard/root/. "${BUILD}/data/"
+          cp -a "${REPO}/nut-guard/root/." "${BUILD}/data/"
 
           mkdir -p "${BUILD}/control"
           printf 'Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: ospfx\nDepends: lua, libuci-lua, libnixio-lua\nSection: utils\nPriority: optional\nDescription: Nut Guard NUT UPS monitor backend scripts\n' \
             "${PKG}" "${VERSION}" > "${BUILD}/control/control"
           printf '/etc/config/nut_guard\n' > "${BUILD}/control/conffiles"
 
-          mkdir -p dist
+          mkdir -p "${REPO}/dist"
           echo "2.0" > "${BUILD}/debian-binary"
-          (cd "${BUILD}/data"    && tar --numeric-owner --owner=0 --group=0 -czf ../../data.tar.gz .)
-          (cd "${BUILD}/control" && tar --numeric-owner --owner=0 --group=0 -czf ../../control.tar.gz .)
-          ar r "dist/${PKG}-${VERSION}.ipk" \
-              "${BUILD}/debian-binary" \
-              "build/control.tar.gz"   \
-              "build/data.tar.gz"
+          (cd "${BUILD}/data"    && tar --numeric-owner --owner=0 --group=0 -czf "${BUILD}/data.tar.gz" .)
+          (cd "${BUILD}/control" && tar --numeric-owner --owner=0 --group=0 -czf "${BUILD}/control.tar.gz" .)
+          ar r "${REPO}/dist/${PKG}-${VERSION}.ipk" \
+              "${BUILD}/debian-binary"   \
+              "${BUILD}/control.tar.gz"  \
+              "${BUILD}/data.tar.gz"
           echo "Built: dist/${PKG}-${VERSION}.ipk"
-          ls -lh dist/
+          ls -lh "${REPO}/dist/"
 
       - name: Upload backend artifact
         uses: actions/upload-artifact@v4
@@ -131,6 +137,8 @@ jobs:
   full:
     name: Full build (luci-app-nut-guard + nut-guard)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     if: >
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' &&
@@ -148,23 +156,24 @@ jobs:
           VERSION: ${{ env.PKG_VERSION }}
         run: |
           set -euo pipefail
-          mkdir -p dist
+          REPO="$(pwd)"
+          mkdir -p "${REPO}/dist"
 
           build_ipk() {
             local PKG="$1" SRC="$2" DEPS="$3" DESC="$4"
-            local BUILD="build/${PKG}"
+            local BUILD="${REPO}/build/${PKG}"
             mkdir -p "${BUILD}/data"
-            cp -a "${SRC}/." "${BUILD}/data/"
+            cp -a "${REPO}/${SRC}/." "${BUILD}/data/"
             mkdir -p "${BUILD}/control"
             printf 'Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: ospfx\nDepends: %s\nSection: utils\nPriority: optional\nDescription: %s\n' \
               "${PKG}" "${VERSION}" "${DEPS}" "${DESC}" > "${BUILD}/control/control"
             echo "2.0" > "${BUILD}/debian-binary"
-            (cd "${BUILD}/data"    && tar --numeric-owner --owner=0 --group=0 -czf "../../${PKG}-data.tar.gz" .)
-            (cd "${BUILD}/control" && tar --numeric-owner --owner=0 --group=0 -czf "../../${PKG}-control.tar.gz" .)
-            ar r "dist/${PKG}-${VERSION}.ipk" \
-                "${BUILD}/debian-binary"       \
-                "build/${PKG}-control.tar.gz"  \
-                "build/${PKG}-data.tar.gz"
+            (cd "${BUILD}/data"    && tar --numeric-owner --owner=0 --group=0 -czf "${BUILD}/data.tar.gz" .)
+            (cd "${BUILD}/control" && tar --numeric-owner --owner=0 --group=0 -czf "${BUILD}/control.tar.gz" .)
+            ar r "${REPO}/dist/${PKG}-${VERSION}.ipk" \
+                "${BUILD}/debian-binary"   \
+                "${BUILD}/control.tar.gz"  \
+                "${BUILD}/data.tar.gz"
             echo "Built: dist/${PKG}-${VERSION}.ipk"
           }
 
@@ -178,7 +187,7 @@ jobs:
             "luci-base, nut-guard" \
             "LuCI support for Nut Guard UPS monitor"
 
-          ls -lh dist/
+          ls -lh "${REPO}/dist/"
 
       - name: Upload full build artifacts
         uses: actions/upload-artifact@v4

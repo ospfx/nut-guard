@@ -33,10 +33,12 @@ end
 
 -- ── read UCI config ───────────────────────────────────────────────────────────
 
-local cursor  = uci.cursor()
-local cfg_ups     = cursor:get("nut_guard", "main", "ups")                    or "myups"
-local cfg_ip      = cursor:get("nut_guard", "main", "ip")                     or "127.0.0.1"
-local cfg_timeout = tonumber(cursor:get("nut_guard", "main", "command_timeout_seconds")) or 3
+local cursor      = uci.cursor()
+local cfg_ups     = cursor:get("nut_guard", "main", "ups") or "myups"
+local cfg_ip      = cursor:get("nut_guard", "main", "ip")  or "127.0.0.1"
+local cfg_timeout = tonumber(
+	cursor:get("nut_guard", "main", "command_timeout_seconds")
+) or 3
 
 -- command-line args override UCI values
 local ups     = (arg and arg[1] and arg[1] ~= "") and arg[1] or cfg_ups

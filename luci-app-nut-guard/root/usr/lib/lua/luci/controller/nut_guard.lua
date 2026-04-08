@@ -2,6 +2,8 @@
 -- Menu path: Admin > Services > Nut Guard
 -- Copyright (C) 2025 ospfx  MIT License
 
+-- module() with package.seeall is the required pattern for LuCI controllers;
+-- LuCI's dispatcher resolves controller functions via this global namespace.
 module("luci.controller.nut_guard", package.seeall)
 
 local nixio = require("nixio")
