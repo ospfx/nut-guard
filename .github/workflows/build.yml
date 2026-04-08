@@ -1,0 +1,197 @@
+name: Build OpenWrt Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Package to build: frontend | backend | full"
+        required: true
+        default: full
+        type: choice
+        options:
+          - frontend
+          - backend
+          - full
+  push:
+    branches:
+      - main
+      - master
+
+env:
+  PKG_VERSION: "1.0.0"
+
+# An .ipk file is an AR archive: debian-binary + control.tar.gz + data.tar.gz
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Manual - Frontend only (luci-app-nut-guard)
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Build frontend (luci-app-nut-guard)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.target == 'frontend'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get install -y --no-install-recommends binutils
+
+      - name: Build luci-app-nut-guard ipk
+        env:
+          VERSION: ${{ env.PKG_VERSION }}
+        run: |
+          set -euo pipefail
+          REPO="$(pwd)"
+          PKG="luci-app-nut-guard"
+          BUILD="${REPO}/build/${PKG}"
+
+          mkdir -p "${BUILD}/data"
+          cp -a "${REPO}/luci-app-nut-guard/root/." "${BUILD}/data/"
+
+          mkdir -p "${BUILD}/control"
+          printf 'Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: ospfx\nDepends: luci-base, nut-guard\nSection: luci\nPriority: optional\nDescription: LuCI support for Nut Guard UPS monitor\n' \
+            "${PKG}" "${VERSION}" > "${BUILD}/control/control"
+          touch "${BUILD}/control/conffiles"
+
+          mkdir -p "${REPO}/dist"
+          echo "2.0" > "${BUILD}/debian-binary"
+          (cd "${BUILD}/data"    && tar --numeric-owner --owner=0 --group=0 -czf "${BUILD}/data.tar.gz" .)
+          (cd "${BUILD}/control" && tar --numeric-owner --owner=0 --group=0 -czf "${BUILD}/control.tar.gz" .)
+          ar r "${REPO}/dist/${PKG}-${VERSION}.ipk" \
+              "${BUILD}/debian-binary"   \
+              "${BUILD}/control.tar.gz"  \
+              "${BUILD}/data.tar.gz"
+          echo "Built: dist/${PKG}-${VERSION}.ipk"
+          ls -lh "${REPO}/dist/"
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-nut-guard-${{ env.PKG_VERSION }}
+          path: dist/*.ipk
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Manual - Backend only (nut-guard)
+  # ---------------------------------------------------------------------------
+  backend:
+    name: Build backend (nut-guard)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.target == 'backend'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get install -y --no-install-recommends binutils
+
+      - name: Build nut-guard ipk
+        env:
+          VERSION: ${{ env.PKG_VERSION }}
+        run: |
+          set -euo pipefail
+          REPO="$(pwd)"
+          PKG="nut-guard"
+          BUILD="${REPO}/build/${PKG}"
+
+          mkdir -p "${BUILD}/data"
+          cp -a "${REPO}/nut-guard/root/." "${BUILD}/data/"
+
+          mkdir -p "${BUILD}/control"
+          printf 'Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: ospfx\nDepends: lua, libuci-lua, libnixio-lua\nSection: utils\nPriority: optional\nDescription: Nut Guard NUT UPS monitor backend scripts\n' \
+            "${PKG}" "${VERSION}" > "${BUILD}/control/control"
+          printf '/etc/config/nut_guard\n' > "${BUILD}/control/conffiles"
+
+          mkdir -p "${REPO}/dist"
+          echo "2.0" > "${BUILD}/debian-binary"
+          (cd "${BUILD}/data"    && tar --numeric-owner --owner=0 --group=0 -czf "${BUILD}/data.tar.gz" .)
+          (cd "${BUILD}/control" && tar --numeric-owner --owner=0 --group=0 -czf "${BUILD}/control.tar.gz" .)
+          ar r "${REPO}/dist/${PKG}-${VERSION}.ipk" \
+              "${BUILD}/debian-binary"   \
+              "${BUILD}/control.tar.gz"  \
+              "${BUILD}/data.tar.gz"
+          echo "Built: dist/${PKG}-${VERSION}.ipk"
+          ls -lh "${REPO}/dist/"
+
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nut-guard-${{ env.PKG_VERSION }}
+          path: dist/*.ipk
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Auto (push) + Manual - Full build (both packages)
+  # ---------------------------------------------------------------------------
+  full:
+    name: Full build (luci-app-nut-guard + nut-guard)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.event.inputs.target == 'full')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get install -y --no-install-recommends binutils
+
+      - name: Build all ipks
+        env:
+          VERSION: ${{ env.PKG_VERSION }}
+        run: |
+          set -euo pipefail
+          REPO="$(pwd)"
+          mkdir -p "${REPO}/dist"
+
+          build_ipk() {
+            local PKG="$1" SRC="$2" DEPS="$3" DESC="$4"
+            local BUILD="${REPO}/build/${PKG}"
+            mkdir -p "${BUILD}/data"
+            cp -a "${REPO}/${SRC}/." "${BUILD}/data/"
+            mkdir -p "${BUILD}/control"
+            printf 'Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: ospfx\nDepends: %s\nSection: utils\nPriority: optional\nDescription: %s\n' \
+              "${PKG}" "${VERSION}" "${DEPS}" "${DESC}" > "${BUILD}/control/control"
+            echo "2.0" > "${BUILD}/debian-binary"
+            (cd "${BUILD}/data"    && tar --numeric-owner --owner=0 --group=0 -czf "${BUILD}/data.tar.gz" .)
+            (cd "${BUILD}/control" && tar --numeric-owner --owner=0 --group=0 -czf "${BUILD}/control.tar.gz" .)
+            ar r "${REPO}/dist/${PKG}-${VERSION}.ipk" \
+                "${BUILD}/debian-binary"   \
+                "${BUILD}/control.tar.gz"  \
+                "${BUILD}/data.tar.gz"
+            echo "Built: dist/${PKG}-${VERSION}.ipk"
+          }
+
+          build_ipk "nut-guard" \
+            "nut-guard/root" \
+            "lua, libuci-lua, libnixio-lua" \
+            "Nut Guard NUT UPS monitor backend scripts"
+
+          build_ipk "luci-app-nut-guard" \
+            "luci-app-nut-guard/root" \
+            "luci-base, nut-guard" \
+            "LuCI support for Nut Guard UPS monitor"
+
+          ls -lh "${REPO}/dist/"
+
+      - name: Upload full build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nut-guard-full-${{ env.PKG_VERSION }}
+          path: dist/*.ipk
+          retention-days: 30

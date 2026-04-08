@@ -1,0 +1,18 @@
+{
+  "luci-app-nut-guard": {
+    "description": "Grant UCI read/write and service control access for nut-guard",
+    "read": {
+      "uci": [ "nut_guard" ],
+      "ubus": {
+        "service": [ "list" ]
+      }
+    },
+    "write": {
+      "uci": [ "nut_guard" ],
+      "ubus": {
+        "service": [ "set", "list", "event" ],
+        "rc": [ "init" ]
+      }
+    }
+  }
+}

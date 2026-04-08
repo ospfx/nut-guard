@@ -170,3 +170,106 @@ docker run -d --name ups-web \
 ## 许可证
 
 MIT License
+
+---
+
+## OpenWrt / ImmortalWrt LuCI 版本（推荐）
+
+> **注意**：本仓库已完成迁移，提供完整的 OpenWrt 包结构，**不再需要 Node.js 运行时**。
+
+### 目录结构
+
+```text
+luci-app-nut-guard/          ← LuCI 前端包（菜单 + CBI 配置页 + JS 状态视图）
+  Makefile
+  root/usr/lib/lua/luci/
+    controller/nut_guard.lua ← LuCI 控制器（菜单 + JSON API）
+    model/cbi/nut_guard.lua  ← UCI 配置管理（CBI）
+    view/nut_guard/status.htm
+  root/usr/share/rpcd/acl.d/luci-app-nut-guard.json
+  root/www/luci-static/resources/view/nut_guard/index.js
+
+nut-guard/                   ← 后端包（Lua NUT 客户端 + init.d + UCI 默认配置）
+  Makefile
+  root/etc/config/nut_guard  ← UCI 默认配置
+  root/etc/init.d/nut-guard  ← procd init 脚本
+  root/usr/libexec/nut-guard/core.lua ← Lua NUT TCP 客户端
+
+.github/workflows/build.yml  ← GitHub Actions 自动打包（3 个 Job）
+```
+
+### 后端 API
+
+访问路径均通过 LuCI（`/cgi-bin/luci/`），**不监听额外端口**：
+
+| 路径 | 说明 |
+|------|------|
+| `GET  /cgi-bin/luci/admin/services/nut_guard/status` | LuCI JS 状态页 |
+| `GET  /cgi-bin/luci/admin/services/nut_guard/config` | UCI 配置管理页 |
+| `GET  /cgi-bin/luci/admin/services/nut_guard/api/status` | JSON：查询 NUT 状态 |
+| `POST /cgi-bin/luci/admin/services/nut_guard/api/reload` | JSON：重载服务 |
+
+### OpenWrt / ImmortalWrt 安装
+
+#### 方法一：从 GitHub Releases 下载 ipk
+
+1. 前往 [Actions](../../actions) 运行 **Full build** 或下载最新 Release 的 ipk 文件。
+2. 将 `nut-guard-*.ipk` 和 `luci-app-nut-guard-*.ipk` 上传至路由器，然后执行：
+
+```bash
+opkg install nut-guard-1.0.0.ipk
+opkg install luci-app-nut-guard-1.0.0.ipk
+```
+
+#### 方法二：通过 OpenWrt Buildroot 编译
+
+```bash
+# 在 OpenWrt/ImmortalWrt buildroot 中
+cp -r luci-app-nut-guard  package/feeds/luci/
+cp -r nut-guard           package/utils/
+
+make menuconfig   # 在 LuCI Applications 中勾选 luci-app-nut-guard
+make package/luci-app-nut-guard/compile
+make package/nut-guard/compile
+```
+
+### 配置
+
+安装后，在 LuCI 菜单 **Services → Nut Guard → Configuration** 中填写：
+
+| 选项 | 说明 | 默认值 |
+|------|------|--------|
+| Enable | 启用服务 | 关 |
+| NUT Server IP / Host | NUT 服务器地址 | 127.0.0.1 |
+| UPS Name | UPS 名称 | myups |
+| Status Refresh Interval | 状态页刷新间隔（秒） | 5 |
+| NUT Connection Timeout | NUT TCP 连接超时（秒） | 3 |
+
+或直接编辑 `/etc/config/nut_guard`：
+
+```uci
+config main 'main'
+    option enabled '1'
+    option ups 'myups'
+    option ip '10.0.0.9'
+    option refresh_seconds '5'
+    option command_timeout_seconds '3'
+```
+
+### GitHub Actions 工作流
+
+`.github/workflows/build.yml` 包含三个 Job：
+
+| Job | 触发方式 | 产物 |
+|-----|----------|------|
+| `frontend` | 手动（选 `frontend`） | `luci-app-nut-guard-*.ipk` |
+| `backend`  | 手动（选 `backend`）  | `nut-guard-*.ipk` |
+| `full`     | push 到 main/master **或** 手动（选 `full`） | 两个 ipk 均产出 |
+
+### ACL 权限
+
+`/usr/share/rpcd/acl.d/luci-app-nut-guard.json` 按最小权限原则配置：
+
+- 允许读取 `nut_guard` UCI 配置
+- 允许写入 `nut_guard` UCI 配置
+- 允许调用 `service` ubus 方法（用于服务控制）
