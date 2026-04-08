@@ -1,10 +1,10 @@
-name: Build OpenWrt Packages (SDK)
+name: Build OpenWrt Packages
 
 on:
   workflow_dispatch:
     inputs:
       target:
-        description: "frontend | backend | full"
+        description: "Package to build: frontend | backend | full"
         required: true
         default: full
         type: choice
@@ -12,61 +12,148 @@ on:
   push:
     branches: [main, master]
 
+env:
+  OPENWRT_REF: openwrt-24.10
+  PKG_VERSION: "1.0.0"
+
 jobs:
-  build:
+  frontend:
+    name: Build frontend (luci-app-nut-guard)
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'frontend'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install deps
+      - name: Prepare build env
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang flex bison g++ gawk \
             gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
-            python3 python3-distutils rsync unzip zlib1g-dev file wget
+            python3-setuptools rsync swig unzip zlib1g-dev file wget
 
-      - name: Download OpenWrt SDK
+      - name: Clone OpenWrt source
         run: |
-          # 这里换成你目标架构对应的 SDK URL（必须与路由器架构一致）
-          SDK_URL="https://downloads.openwrt.org/releases/24.10.0/targets/ath79/generic/openwrt-sdk-24.10.0-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
-          wget -O sdk.tar.zst "$SDK_URL"
-          tar --zstd -xf sdk.tar.zst
-          mv openwrt-sdk-* openwrt
+          git clone --depth 1 -b "${OPENWRT_REF}" https://github.com/openwrt/openwrt.git openwrt
 
-      - name: Prepare feeds
+      - name: Inject packages
+        run: |
+          mkdir -p openwrt/package/nut-guard
+          cp -a nut-guard openwrt/package/
+          cp -a luci-app-nut-guard openwrt/package/
+
+      - name: Configure feeds
         run: |
           cd openwrt
           ./scripts/feeds update -a
-          ./scripts/feeds install luci-base
-          ./scripts/feeds install libuci-lua
-          ./scripts/feeds install lua-runtime
+          ./scripts/feeds install -a
+
+      - name: Build luci-app-nut-guard
+        run: |
+          cd openwrt
+          make defconfig
+          make package/luci-app-nut-guard/compile V=s -j"$(nproc)"
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          find openwrt/bin/packages -type f -name "luci-app-nut-guard*.ipk" -exec cp -v {} dist/ \;
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-nut-guard-${{ env.PKG_VERSION }}
+          path: dist/*.ipk
+
+  backend:
+    name: Build backend (nut-guard)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'backend'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare build env
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-setuptools rsync swig unzip zlib1g-dev file wget
+
+      - name: Clone OpenWrt source
+        run: |
+          git clone --depth 1 -b "${OPENWRT_REF}" https://github.com/openwrt/openwrt.git openwrt
+
+      - name: Inject packages
+        run: |
+          mkdir -p openwrt/package/nut-guard
+          cp -a nut-guard openwrt/package/
+          cp -a luci-app-nut-guard openwrt/package/
+
+      - name: Configure feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Build nut-guard
+        run: |
+          cd openwrt
+          make defconfig
+          make package/nut-guard/compile V=s -j"$(nproc)"
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          find openwrt/bin/packages -type f -name "nut-guard*.ipk" -exec cp -v {} dist/ \;
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nut-guard-${{ env.PKG_VERSION }}
+          path: dist/*.ipk
+
+  full:
+    name: Full build (luci-app-nut-guard + nut-guard)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'full')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare build env
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-setuptools rsync swig unzip zlib1g-dev file wget
+
+      - name: Clone OpenWrt source
+        run: |
+          git clone --depth 1 -b "${OPENWRT_REF}" https://github.com/openwrt/openwrt.git openwrt
 
       - name: Inject packages
         run: |
           cp -a nut-guard openwrt/package/
           cp -a luci-app-nut-guard openwrt/package/
 
-      - name: Build selected packages
+      - name: Configure feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Build all
         run: |
           cd openwrt
           make defconfig
-          TARGET="${{ github.event.inputs.target || 'full' }}"
-          if [ "$TARGET" = "frontend" ]; then
-            make package/luci-app-nut-guard/compile V=s -j"$(nproc)"
-          elif [ "$TARGET" = "backend" ]; then
-            make package/nut-guard/compile V=s -j"$(nproc)"
-          else
-            make package/nut-guard/compile V=s -j"$(nproc)"
-            make package/luci-app-nut-guard/compile V=s -j"$(nproc)"
-          fi
+          make package/nut-guard/compile V=s -j"$(nproc)"
+          make package/luci-app-nut-guard/compile V=s -j"$(nproc)"
 
-      - name: Collect ipk
+      - name: Collect artifacts
         run: |
           mkdir -p dist
-          find openwrt/bin/packages -type f -name "*nut-guard*.ipk" -exec cp -v {} dist/ \;
+          find openwrt/bin/packages -type f \( -name "nut-guard*.ipk" -o -name "luci-app-nut-guard*.ipk" \) -exec cp -v {} dist/ \;
           ls -lh dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ipk-${{ github.run_id }}
+          name: nut-guard-full-${{ env.PKG_VERSION }}
           path: dist/*.ipk
