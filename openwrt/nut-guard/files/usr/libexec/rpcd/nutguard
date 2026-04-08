@@ -7,11 +7,11 @@
     get_ups     – query NUT upsd via TCP and return UPS variables
 
   Install to: /usr/libexec/rpcd/nutguard  (executable)
-  Depends on: lua, libuci-lua, luci-base (luci.jsonc), nixio
+  Depends on: lua, libuci-lua, luci-base (luci.jsonc), lua-socket
 --]]
 
 local jsonc = require("luci.jsonc")
-local nixio  = require("nixio")
+local socket  = require("socket")
 local uci_lib = require("uci")
 
 local CONFIG    = "nut-guard"
@@ -79,13 +79,13 @@ local function cache_read(key)
 	local raw = f:read("*all"); f:close()
 	local obj = jsonc.parse(raw)
 	if type(obj) ~= "table" or obj.key ~= key then return nil end
-	local now_sec = nixio.gettimeofday()
+	local now_sec = os.time()
 	if now_sec - (obj.ts or 0) >= CACHE_TTL then return nil end
 	return obj.payload
 end
 
 local function cache_write(key, payload)
-	local now_sec = nixio.gettimeofday()
+	local now_sec = os.time()
 	local encoded = jsonc.stringify({ key = key, ts = now_sec, payload = payload })
 	if not encoded then return end
 	local f = io.open(CACHE_FILE, "w")
@@ -97,80 +97,56 @@ end
 -- ─────────────────────────────────────────────────────────────
 
 local function get_ups_data(ups, ip, timeout_sec)
-	local t0_sec, t0_usec = nixio.gettimeofday()
+	local t0 = socket.gettime()
 	local function took_ms()
-		local s, u = nixio.gettimeofday()
-		return math.floor((s - t0_sec) * 1000 + (u - t0_usec) / 1000)
-	end
-
-	-- Create TCP socket
-	local sock, sock_err = nixio.socket("inet", "stream")
-	if not sock then
-		return { ok = false, error = "无法创建 socket: " .. tostring(sock_err or "unknown"), tookMs = 0 }
+		return math.floor((socket.gettime() - t0) * 1000)
 	end
 
 	local tv = math.max(1, math.floor(timeout_sec))
 
-	-- Non-blocking connect; for refused/unreachable connections this returns an
-	-- error immediately (ECONNREFUSED, EHOSTUNREACH, etc.).  For connections that
-	-- are in progress (EINPROGRESS / EAGAIN) we fall through to poll().
-	local conn_ok, conn_errno, conn_errmsg = sock:connect(ip, NUT_PORT)
-	if not conn_ok and conn_errno ~= nixio.const.EINPROGRESS and conn_errno ~= nixio.const.EAGAIN then
+	-- Create TCP socket
+	local sock, sock_err = socket.tcp()
+	if not sock then
+		return { ok = false, error = "无法创建 socket: " .. tostring(sock_err or "unknown"), tookMs = 0 }
+	end
+
+	-- Set connect/read/write timeout (luasocket honours this for connect too)
+	sock:settimeout(tv)
+
+	-- Connect to NUT server
+	local conn_ok, conn_err = sock:connect(ip, NUT_PORT)
+	if not conn_ok then
 		sock:close()
 		return {
 			ok     = false,
-			error  = string.format("连接 NUT 服务器失败: %s", tostring(conn_errmsg or conn_errno)),
+			error  = string.format("连接 NUT 服务器失败: %s", tostring(conn_err or "unknown")),
 			tookMs = took_ms(),
 		}
 	end
-
-	-- Wait for connection with poll (timeout_sec * 1000 ms)
-	local poll_ms = math.max(1000, tv * 1000)
-	local nready  = nixio.poll({ { fd = sock, events = nixio.poll_flags("out") } }, poll_ms)
-
-	if not nready or nready == 0 then
-		sock:close()
-		return {
-			ok     = false,
-			error  = string.format("NUT 服务器连接超时（>%ds）", tv),
-			tookMs = took_ms(),
-		}
-	end
-
-	-- Verify that connect actually succeeded (SO_ERROR)
-	local so_err = sock:getopt("socket", "error")
-	if so_err ~= 0 then
-		sock:close()
-		return {
-			ok     = false,
-			error  = string.format("连接 NUT 服务器失败（errno=%d）", so_err),
-			tookMs = took_ms(),
-		}
-	end
-
-	-- Switch to blocking with read/write timeouts
-	sock:setblocking(true)
-	sock:setopt("socket", "rcvtimeo", tv)
-	sock:setopt("socket", "sndtimeo", tv)
 
 	-- Send LIST VAR command
-	local _, write_err = sock:write("LIST VAR " .. ups .. "\n")
-	if write_err then
+	local _, send_err = sock:send("LIST VAR " .. ups .. "\n")
+	if send_err then
 		sock:close()
 		return {
 			ok     = false,
-			error  = "发送命令失败: " .. tostring(write_err),
+			error  = "发送命令失败: " .. tostring(send_err),
 			tookMs = took_ms(),
 		}
 	end
 
-	-- Read until "END LIST VAR" or EOF / timeout
+	-- Read lines until "END LIST VAR" or EOF / timeout
 	local buffer = ""
+	local last_recv_err
 	while true do
-		local chunk = sock:read(4096)
-		if not chunk or chunk == "" then break end
-		buffer = buffer .. chunk
-		if buffer:find("END LIST VAR", 1, true) then break end
+		local line, recv_err = sock:receive("*l")
+		if not line then
+			-- timeout or connection closed; record error and let parser decide
+			last_recv_err = recv_err
+			break
+		end
+		buffer = buffer .. line .. "\n"
+		if line:find("END LIST VAR", 1, true) then break end
 	end
 	sock:close()
 
@@ -182,7 +158,8 @@ local function get_ups_data(ups, ip, timeout_sec)
 		if err_line then
 			return { ok = false, error = "NUT 错误: " .. err_line, tookMs = ms }
 		end
-		return { ok = false, error = "NUT 服务器连接超时或意外关闭", tookMs = ms }
+		local detail = last_recv_err and (": " .. last_recv_err) or ""
+		return { ok = false, error = "NUT 服务器连接超时或意外关闭" .. detail, tookMs = ms }
 	end
 
 	-- Parse response

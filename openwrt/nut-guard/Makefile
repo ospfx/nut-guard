@@ -17,7 +17,8 @@ define Package/nut-guard
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=NUT UPS Guard - rpcd/ubus backend
-  DEPENDS:=+rpcd +lua +libuci-lua +luci-base +nixio
+  PKGARCH:=all
+  DEPENDS:=+rpcd +lua +libuci-lua +luci-base +lua-socket
   URL:=https://github.com/ospfx/nut-guard
 endef
 
