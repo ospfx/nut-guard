@@ -7,11 +7,11 @@
     get_ups     – query NUT upsd via TCP and return UPS variables
 
   Install to: /usr/libexec/rpcd/nutguard  (executable)
-  Depends on: lua, libuci-lua, luci-base (luci.jsonc)
-  NUT TCP queries use busybox nc + timeout; no lua-socket required.
+  Depends on: lua, libuci-lua, luci-base (luci.jsonc), lua-socket
 --]]
 
 local jsonc = require("luci.jsonc")
+local socket  = require("socket")
 local uci_lib = require("uci")
 
 local CONFIG    = "nut-guard"
@@ -93,63 +93,64 @@ local function cache_write(key, payload)
 end
 
 -- ─────────────────────────────────────────────────────────────
--- Monotonic clock (milliseconds) via /proc/uptime
--- ─────────────────────────────────────────────────────────────
-
-local function mono_ms()
-	local f = io.open("/proc/uptime", "r")
-	if not f then return os.time() * 1000 end
-	local s = f:read("*l"); f:close()
-	local n = s and tonumber(s:match("^(%S+)"))
-	return (n and n > 0) and math.floor(n * 1000) or (os.time() * 1000)
-end
-
--- ─────────────────────────────────────────────────────────────
 -- NUT TCP query  (LIST VAR <ups>)
--- Uses busybox nc + timeout; no lua-socket required.
--- ups and ip are pre-validated (alphanumeric + _ - . only) so
--- there is no shell-injection risk from these variables.
 -- ─────────────────────────────────────────────────────────────
 
 local function get_ups_data(ups, ip, timeout_sec)
-	local t0 = mono_ms()
-	local function took_ms() return mono_ms() - t0 end
+	local t0 = socket.gettime()
+	local function took_ms()
+		return math.floor((socket.gettime() - t0) * 1000)
+	end
 
 	local tv = math.max(1, math.floor(timeout_sec))
 
-	-- Callers must validate ups/ip before calling this function.
-	-- These checks are a defence-in-depth guard; normal call paths run
-	-- is_valid_ups_name / is_valid_ip_or_host on every value first.
-	if not is_valid_ups_name(ups) or not is_valid_ip_or_host(ip) then
-		return { ok = false, error = "内部错误：UPS 名称或主机地址未通过验证", tookMs = 0 }
+	-- Create TCP socket
+	local sock, sock_err = socket.tcp()
+	if not sock then
+		return { ok = false, error = "无法创建 socket: " .. tostring(sock_err or "unknown"), tookMs = 0 }
 	end
 
-	-- Build shell command: pipe NUT commands to nc with a hard timeout.
-	-- Send "LIST VAR <ups>" then "LOGOUT" so the server closes gracefully.
-	-- ups and ip are validated above (alphanumeric + _ - . only), so there is
-	-- no shell-injection risk from these variables.
-	local cmd = string.format(
-		"printf 'LIST VAR %s\\nLOGOUT\\n' | timeout %d nc %s %d 2>/dev/null",
-		ups, tv, ip, NUT_PORT
-	)
+	-- Set connect/read/write timeout (luasocket honours this for connect too)
+	sock:settimeout(tv)
 
-	local handle = io.popen(cmd)
-	if not handle then
-		return { ok = false, error = "无法执行网络查询命令", tookMs = took_ms() }
-	end
-
-	local buffer = handle:read("*all") or ""
-	handle:close()
-
-	local ms = took_ms()
-
-	if #buffer == 0 then
+	-- Connect to NUT server
+	local conn_ok, conn_err = sock:connect(ip, NUT_PORT)
+	if not conn_ok then
+		sock:close()
 		return {
 			ok     = false,
-			error  = string.format("连接 NUT 服务器失败或超时（%s:%d）", ip, NUT_PORT),
-			tookMs = ms,
+			error  = string.format("连接 NUT 服务器失败: %s", tostring(conn_err or "unknown")),
+			tookMs = took_ms(),
 		}
 	end
+
+	-- Send LIST VAR command
+	local _, send_err = sock:send("LIST VAR " .. ups .. "\n")
+	if send_err then
+		sock:close()
+		return {
+			ok     = false,
+			error  = "发送命令失败: " .. tostring(send_err),
+			tookMs = took_ms(),
+		}
+	end
+
+	-- Read lines until "END LIST VAR" or EOF / timeout
+	local buffer = ""
+	local last_recv_err
+	while true do
+		local line, recv_err = sock:receive("*l")
+		if not line then
+			-- timeout or connection closed; record error and let parser decide
+			last_recv_err = recv_err
+			break
+		end
+		buffer = buffer .. line .. "\n"
+		if line:find("END LIST VAR", 1, true) then break end
+	end
+	sock:close()
+
+	local ms = took_ms()
 
 	-- Handle incomplete response
 	if not buffer:find("END LIST VAR", 1, true) then
@@ -157,7 +158,8 @@ local function get_ups_data(ups, ip, timeout_sec)
 		if err_line then
 			return { ok = false, error = "NUT 错误: " .. err_line, tookMs = ms }
 		end
-		return { ok = false, error = "NUT 服务器连接超时或意外关闭", tookMs = ms }
+		local detail = last_recv_err and (": " .. last_recv_err) or ""
+		return { ok = false, error = "NUT 服务器连接超时或意外关闭" .. detail, tookMs = ms }
 	end
 
 	-- Parse response

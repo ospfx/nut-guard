@@ -179,11 +179,11 @@ ubus call nutguard get_ups '{"ups":"myups","ip":"10.0.0.9"}'
 
 | 错误信息 | 原因 |
 |----------|------|
-| `连接 NUT 服务器失败或超时（host:port）` | TCP 连接超时或主机不可达 |
-| `NUT 服务器连接超时或意外关闭` | 连接建立后对端关闭或响应不完整 |
+| `NUT 服务器连接超时（>Ns）` | TCP 连接 / 读取超时 |
+| `连接 NUT 服务器失败（errno=N）` | 主机不可达、端口未监听 |
+| `NUT 服务器连接超时或意外关闭` | 连接建立后对端关闭 |
 | `NUT 错误: UNKNOWN-UPS` | upsd 返回 ERR，UPS 名称不存在 |
 | `未获取到 UPS 数据，请检查 UPS 名称是否正确` | 响应为空列表 |
-| `无法执行网络查询命令` | busybox nc 或 timeout 不可用 |
 
 ---
 
@@ -200,10 +200,10 @@ ubus call nutguard get_ups '{"ups":"myups","ip":"10.0.0.9"}'
 ```bash
 # 0. 安装前检查依赖可用性
 opkg update
-opkg info rpcd lua libuci-lua luci-base
+opkg info rpcd lua libuci-lua luci-base lua-socket
 
-# 1. 安装依赖（不再需要 lua-socket）
-opkg install rpcd lua libuci-lua luci-base
+# 1. 安装依赖
+opkg install rpcd lua libuci-lua luci-base lua-socket
 
 # 2. 复制插件
 scp openwrt/nut-guard/files/usr/libexec/rpcd/nutguard root@<router>:/usr/libexec/rpcd/
@@ -225,7 +225,7 @@ scp openwrt/luci-app-nut-guard/root/usr/share/rpcd/acl.d/luci-app-nut-guard.json
 | 错误信息 | 原因 | 解决方法 |
 |----------|------|----------|
 | `cannot find dependency nixio` | 旧版 ipk 包含 nixio 依赖 | 使用最新构建的 ipk（已移除 nixio）|
-| `cannot find dependency lua-socket` | 旧版 ipk 包含 lua-socket 依赖 | 使用最新构建的 ipk（已移除 lua-socket，NUT 查询改用 busybox nc）|
+| `cannot find dependency lua-socket` | feeds 中无 lua-socket | `opkg update && opkg install lua-socket` |
 | `incompatible architectures` | ipk 架构与设备不符 | 重新用设备对应 SDK 构建（包已标记 `PKGARCH:=all`）|
 
 ### 验证

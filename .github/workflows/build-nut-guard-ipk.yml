@@ -73,12 +73,12 @@ jobs:
           echo "SDK_DIR=${SDK_DIR}" >> $GITHUB_ENV
 
       - name: Prepare feeds
-        # Install feeds required by nut-guard (rpcd, lua, luci-base).
-        # lua-socket is no longer a dependency – NUT queries use busybox nc.
+        # Install feeds required by nut-guard (rpcd, lua, luci-base, lua-socket).
+        # nixio is no longer a dependency – replaced by lua-socket.
         working-directory: ${{ env.SDK_DIR }}
         run: |
           ./scripts/feeds update base luci packages
-          ./scripts/feeds install luci-base
+          ./scripts/feeds install luci-base lua-socket
 
       - name: Verify package directory
         run: |
