@@ -1,0 +1,405 @@
+#!/usr/bin/lua
+--[[
+  NUT Guard – rpcd exec plugin
+  Exposes ubus object "nutguard" with methods:
+    get_config  – read UCI settings
+    set_config  – write UCI settings (validates inputs)
+    get_ups     – query NUT upsd via TCP and return UPS variables
+
+  Install to: /usr/libexec/rpcd/nutguard  (executable)
+  Depends on: lua, libuci-lua, luci-base (luci.jsonc), nixio
+--]]
+
+local jsonc = require("luci.jsonc")
+local nixio  = require("nixio")
+local uci_lib = require("uci")
+
+local CONFIG    = "nut-guard"
+local SECTION   = "settings"
+local NUT_PORT  = 3493
+local CACHE_FILE = "/tmp/.nut-guard-cache.json"
+local CACHE_TTL  = 1   -- seconds
+
+-- ─────────────────────────────────────────────────────────────
+-- Helpers
+-- ─────────────────────────────────────────────────────────────
+
+local function trim(s)
+	return type(s) == "string" and s:match("^%s*(.-)%s*$") or ""
+end
+
+local function is_valid_ups_name(s)
+	s = trim(s)
+	if #s == 0 or #s > 64 then return false end
+	return s:match("^[A-Za-z0-9_%-%.]+$") ~= nil
+end
+
+local function is_valid_ip_or_host(s)
+	s = trim(s)
+	if #s == 0 or #s > 253 then return false end
+	-- IPv4
+	local a, b, c, d = s:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+	if a then
+		for _, oct in ipairs({ tonumber(a), tonumber(b), tonumber(c), tonumber(d) }) do
+			if oct > 255 then return false end
+		end
+		return true
+	end
+	-- hostname: starts and ends with alphanumeric; no consecutive dots or hyphens
+	if s:match("%.%.") or s:match("%-%-") then return false end
+	return s:match("^[A-Za-z0-9]$") ~= nil
+		or s:match("^[A-Za-z0-9][A-Za-z0-9%-%.]*[A-Za-z0-9]$") ~= nil
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- UCI helpers
+-- ─────────────────────────────────────────────────────────────
+
+local function read_config()
+	local c = uci_lib.cursor()
+	local function g(k, def)
+		return c:get(CONFIG, SECTION, k) or def
+	end
+	return {
+		ups                   = g("ups_name",            "myups"),
+		ip                    = g("nut_host",             "127.0.0.1"),
+		refreshSeconds        = tonumber(g("refresh_seconds",      "5"))  or 5,
+		commandTimeoutSeconds = tonumber(g("timeout_seconds",      "3"))  or 3,
+		allowQueryOverride    = g("allow_query_override", "0") == "1",
+	}
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- File-based cache (1-second TTL, keyed by ups@ip)
+-- ─────────────────────────────────────────────────────────────
+
+local function cache_read(key)
+	local f = io.open(CACHE_FILE, "r")
+	if not f then return nil end
+	local raw = f:read("*all"); f:close()
+	local obj = jsonc.parse(raw)
+	if type(obj) ~= "table" or obj.key ~= key then return nil end
+	local now_sec = nixio.gettimeofday()
+	if now_sec - (obj.ts or 0) >= CACHE_TTL then return nil end
+	return obj.payload
+end
+
+local function cache_write(key, payload)
+	local now_sec = nixio.gettimeofday()
+	local encoded = jsonc.stringify({ key = key, ts = now_sec, payload = payload })
+	if not encoded then return end
+	local f = io.open(CACHE_FILE, "w")
+	if f then f:write(encoded); f:close() end
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- NUT TCP query  (LIST VAR <ups>)
+-- ─────────────────────────────────────────────────────────────
+
+local function get_ups_data(ups, ip, timeout_sec)
+	local t0_sec, t0_usec = nixio.gettimeofday()
+	local function took_ms()
+		local s, u = nixio.gettimeofday()
+		return math.floor((s - t0_sec) * 1000 + (u - t0_usec) / 1000)
+	end
+
+	-- Create TCP socket
+	local sock, sock_err = nixio.socket("inet", "stream")
+	if not sock then
+		return { ok = false, error = "无法创建 socket: " .. tostring(sock_err or "unknown"), tookMs = 0 }
+	end
+
+	local tv = math.max(1, math.floor(timeout_sec))
+
+	-- Non-blocking connect; for refused/unreachable connections this returns an
+	-- error immediately (ECONNREFUSED, EHOSTUNREACH, etc.).  For connections that
+	-- are in progress (EINPROGRESS / EAGAIN) we fall through to poll().
+	local conn_ok, conn_errno, conn_errmsg = sock:connect(ip, NUT_PORT)
+	if not conn_ok and conn_errno ~= nixio.const.EINPROGRESS and conn_errno ~= nixio.const.EAGAIN then
+		sock:close()
+		return {
+			ok     = false,
+			error  = string.format("连接 NUT 服务器失败: %s", tostring(conn_errmsg or conn_errno)),
+			tookMs = took_ms(),
+		}
+	end
+
+	-- Wait for connection with poll (timeout_sec * 1000 ms)
+	local poll_ms = math.max(1000, tv * 1000)
+	local nready  = nixio.poll({ { fd = sock, events = nixio.poll_flags("out") } }, poll_ms)
+
+	if not nready or nready == 0 then
+		sock:close()
+		return {
+			ok     = false,
+			error  = string.format("NUT 服务器连接超时（>%ds）", tv),
+			tookMs = took_ms(),
+		}
+	end
+
+	-- Verify that connect actually succeeded (SO_ERROR)
+	local so_err = sock:getopt("socket", "error")
+	if so_err ~= 0 then
+		sock:close()
+		return {
+			ok     = false,
+			error  = string.format("连接 NUT 服务器失败（errno=%d）", so_err),
+			tookMs = took_ms(),
+		}
+	end
+
+	-- Switch to blocking with read/write timeouts
+	sock:setblocking(true)
+	sock:setopt("socket", "rcvtimeo", tv)
+	sock:setopt("socket", "sndtimeo", tv)
+
+	-- Send LIST VAR command
+	local _, write_err = sock:write("LIST VAR " .. ups .. "\n")
+	if write_err then
+		sock:close()
+		return {
+			ok     = false,
+			error  = "发送命令失败: " .. tostring(write_err),
+			tookMs = took_ms(),
+		}
+	end
+
+	-- Read until "END LIST VAR" or EOF / timeout
+	local buffer = ""
+	while true do
+		local chunk = sock:read(4096)
+		if not chunk or chunk == "" then break end
+		buffer = buffer .. chunk
+		if buffer:find("END LIST VAR", 1, true) then break end
+	end
+	sock:close()
+
+	local ms = took_ms()
+
+	-- Handle incomplete response
+	if not buffer:find("END LIST VAR", 1, true) then
+		local err_line = buffer:match("ERR%s+(.-)%s*[\r\n]")
+		if err_line then
+			return { ok = false, error = "NUT 错误: " .. err_line, tookMs = ms }
+		end
+		return { ok = false, error = "NUT 服务器连接超时或意外关闭", tookMs = ms }
+	end
+
+	-- Parse response
+	local raw      = {}
+	local ups_data = {}
+	local in_list  = false
+	local parse_err
+
+	for line in buffer:gmatch("[^\r\n]+") do
+		local s = line:match("^%s*(.-)%s*$")
+		if #s > 0 then
+			table.insert(raw, s)
+			if s:match("^BEGIN LIST VAR") then
+				in_list = true
+			elseif s:match("^END LIST VAR") then
+				break
+			elseif in_list and s:match("^VAR ") then
+				-- Format: VAR <upsname> <varname> "<value>"
+				local varname, value = s:match("^VAR %S+ (%S+) \"(.*)\"$")
+				if varname then
+					ups_data[varname] = value
+				end
+			elseif s:match("^ERR ") then
+				parse_err = s:sub(5)
+			end
+		end
+	end
+
+	-- Helpers: slice last N lines
+	local function tail(t, n)
+		local out, len = {}, #t
+		for i = math.max(1, len - n + 1), len do
+			out[#out + 1] = t[i]
+		end
+		return out
+	end
+
+	if parse_err then
+		return {
+			ok     = false,
+			error  = "NUT 服务器错误: " .. parse_err,
+			raw    = tail(raw, 50),
+			tookMs = ms,
+		}
+	end
+
+	if not next(ups_data) then
+		return {
+			ok     = false,
+			error  = "未获取到 UPS 数据，请检查 UPS 名称是否正确",
+			raw    = tail(raw, 50),
+			tookMs = ms,
+		}
+	end
+
+	return {
+		ok     = true,
+		ups    = ups,
+		ip     = ip,
+		data   = ups_data,
+		raw    = tail(raw, 200),
+		tookMs = ms,
+	}
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- Method handlers
+-- ─────────────────────────────────────────────────────────────
+
+local function method_get_config(_params)
+	return read_config()
+end
+
+local function method_set_config(params)
+	if type(params) ~= "table" then
+		return { ok = false, error = "参数无效" }
+	end
+
+	local cfg = read_config()
+
+	local function pget(field, fallback)
+		if params[field] ~= nil then return params[field] end
+		return fallback
+	end
+
+	local ups     = trim(tostring(pget("ups",                  cfg.ups)))
+	local ip      = trim(tostring(pget("ip",                   cfg.ip)))
+	local refresh = tonumber(pget("refreshSeconds",        cfg.refreshSeconds))        or cfg.refreshSeconds
+	local timeout = tonumber(pget("commandTimeoutSeconds", cfg.commandTimeoutSeconds)) or cfg.commandTimeoutSeconds
+	local allow   = pget("allowQueryOverride", cfg.allowQueryOverride)
+	if type(allow) ~= "boolean" then
+		allow = tostring(allow) == "true" or tostring(allow) == "1"
+	end
+
+	if not is_valid_ups_name(ups) then
+		return { ok = false, error = "ups 名称不合法（允许 A-Z a-z 0-9 _ - . 且长度 ≤ 64）" }
+	end
+	if not is_valid_ip_or_host(ip) then
+		return { ok = false, error = "ip/host 不合法" }
+	end
+
+	refresh = math.max(2,  math.min(3600, math.floor(refresh)))
+	timeout = math.max(1,  math.min(30,   math.floor(timeout)))
+
+	local c = uci_lib.cursor()
+	c:set(CONFIG, SECTION, "ups_name",            ups)
+	c:set(CONFIG, SECTION, "nut_host",             ip)
+	c:set(CONFIG, SECTION, "refresh_seconds",      tostring(refresh))
+	c:set(CONFIG, SECTION, "timeout_seconds",      tostring(timeout))
+	c:set(CONFIG, SECTION, "allow_query_override", allow and "1" or "0")
+	c:commit(CONFIG)
+
+	return {
+		ok                    = true,
+		ups                   = ups,
+		ip                    = ip,
+		refreshSeconds        = refresh,
+		commandTimeoutSeconds = timeout,
+		allowQueryOverride    = allow,
+	}
+end
+
+local function method_get_ups(params)
+	if type(params) ~= "table" then params = {} end
+
+	local cfg = read_config()
+	local ups = cfg.ups
+	local ip  = cfg.ip
+
+	if cfg.allowQueryOverride then
+		local q_ups = params.ups and trim(tostring(params.ups)) or ""
+		local q_ip  = params.ip  and trim(tostring(params.ip))  or ""
+		if #q_ups > 0 and is_valid_ups_name(q_ups) then ups = q_ups end
+		if #q_ip  > 0 and is_valid_ip_or_host(q_ip) then ip  = q_ip  end
+	end
+
+	local key    = ups .. "@" .. ip
+	local cached = cache_read(key)
+	if cached then
+		local result = {}
+		for k, v in pairs(cached) do result[k] = v end
+		result.cache = true
+		result.key   = key
+		return result
+	end
+
+	local payload = get_ups_data(ups, ip, cfg.commandTimeoutSeconds)
+	payload.cache = false
+	payload.key   = key
+	cache_write(key, payload)
+	return payload
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- Method table  (params = input schema / type hints for rpcd)
+-- ─────────────────────────────────────────────────────────────
+
+local METHODS = {
+	get_config = {
+		handler = method_get_config,
+		params  = {},
+	},
+	set_config = {
+		handler = method_set_config,
+		params  = {
+			ups                   = "myups",
+			ip                    = "127.0.0.1",
+			refreshSeconds        = 5,
+			commandTimeoutSeconds = 3,
+			allowQueryOverride    = false,
+		},
+	},
+	get_ups = {
+		handler = method_get_ups,
+		params  = { ups = "myups", ip = "127.0.0.1" },
+	},
+}
+
+-- ─────────────────────────────────────────────────────────────
+-- Dispatch (rpcd exec-plugin protocol)
+-- ─────────────────────────────────────────────────────────────
+
+local action = (arg and arg[1]) or ""
+
+if action == "list" then
+	local out = {}
+	for name, def in pairs(METHODS) do
+		out[name] = def.params
+	end
+	io.write(jsonc.stringify(out) .. "\n")
+
+elseif action == "call" then
+	local method_name = (arg and arg[2]) or ""
+	local def = METHODS[method_name]
+
+	if not def then
+		io.write(jsonc.stringify({ ok = false, error = "未知方法: " .. method_name }) .. "\n")
+		os.exit(1)
+	end
+
+	local raw_input = io.stdin:read("*all") or ""
+	local params = {}
+	if #raw_input > 0 then
+		local decoded = jsonc.parse(raw_input)
+		if type(decoded) == "table" then
+			params = decoded
+		end
+	end
+
+	local ok, result = pcall(def.handler, params)
+	if ok then
+		io.write(jsonc.stringify(result) .. "\n")
+	else
+		io.write(jsonc.stringify({ ok = false, error = tostring(result) }) .. "\n")
+	end
+
+else
+	io.stderr:write("nutguard: usage: nutguard list | call <method>\n")
+	os.exit(1)
+end
