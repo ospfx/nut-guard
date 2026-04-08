@@ -491,9 +491,9 @@ return view.extend({
 			return callGetUps();
 		}).then(function(payload) {
 			if (payload && payload.ok) renderData(payload);
+			if (btn) btn.disabled = false;
 		}).catch(function(e) {
 			showError(e && e.message ? e.message : String(e));
-		}).finally(function() {
 			if (btn) btn.disabled = false;
 		});
 	},
